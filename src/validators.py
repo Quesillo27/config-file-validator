@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 import jsonschema
 import yaml
 
+from .config import SECRET_KEY_HINTS
+from .logger import log
 from .parsers import ParseError, parse_file
 
 
@@ -26,11 +29,26 @@ class ValidationResult:
     def valid(self) -> bool:
         return self.parsed_ok and len(self.errors) == 0
 
+    def strict_valid(self) -> bool:
+        """Returns False if there are errors OR warnings (strict mode)."""
+        return self.valid and len(self.warnings) == 0
+
     def add_error(self, message: str, field: str = "", detail: str = ""):
         self.errors.append({"field": field, "message": message, "detail": detail})
+        log.debug("Validation error — field=%s: %s", field or "(root)", message)
 
     def add_warning(self, message: str, field: str = ""):
         self.warnings.append({"field": field, "message": message})
+        log.debug("Validation warning — field=%s: %s", field or "(root)", message)
+
+    def to_dict(self) -> dict:
+        return {
+            "file": self.path,
+            "format": self.fmt,
+            "valid": self.valid,
+            "errors": self.errors,
+            "warnings": self.warnings,
+        }
 
 
 # ── Built-in rules for .env files ────────────────────────────────────────────
@@ -39,37 +57,41 @@ def _validate_env_rules(data: dict, result: ValidationResult, rules: dict):
     """Apply built-in + schema-defined rules to an env dict."""
     required = rules.get("required", [])
     forbidden = rules.get("forbidden", [])
-    patterns = rules.get("patterns", {})  # key → regex
+    patterns = rules.get("patterns", {})
     no_empty = rules.get("no_empty_values", False)
-
-    import re
+    allowed_keys = rules.get("allowed_keys", None)
 
     for key in required:
         if key not in data:
-            result.add_error(f"Required key missing", field=key)
-        elif no_empty and not data[key].strip():
-            result.add_error(f"Required key is empty", field=key)
+            result.add_error("Required key missing", field=key)
+        elif no_empty and not str(data.get(key, "")).strip():
+            result.add_error("Required key is empty", field=key)
 
     for key in forbidden:
         if key in data:
             result.add_error(
-                f"Forbidden key present (should not be set here)", field=key
+                "Forbidden key present (should not be set here)", field=key
             )
+
+    if allowed_keys is not None:
+        for key in data:
+            if key not in allowed_keys:
+                result.add_warning(f"Unexpected key (not in allowed_keys)", field=key)
 
     for key, pattern in patterns.items():
         if key in data:
-            if not re.match(pattern, data[key]):
+            val = str(data[key]) if data[key] is not None else ""
+            if not re.match(pattern, val):
                 result.add_error(
                     f"Value does not match pattern '{pattern}'",
                     field=key,
-                    detail=f"Got: {data[key]!r}",
+                    detail=f"Got: {val!r}",
                 )
 
-    # Warn about keys that look like secrets but have no value
-    secret_hints = ("SECRET", "PASSWORD", "TOKEN", "KEY", "PWD", "PASS")
     for key, val in data.items():
-        if any(hint in key.upper() for hint in secret_hints) and not val.strip():
-            result.add_warning(f"Secret-looking key has empty value", field=key)
+        val_str = str(val) if val is not None else ""
+        if any(hint in key.upper() for hint in SECRET_KEY_HINTS) and not val_str.strip():
+            result.add_warning("Secret-looking key has empty value", field=key)
 
 
 # ── JSON Schema validation ────────────────────────────────────────────────────
@@ -118,8 +140,8 @@ def validate(
     Args:
         config_path: Path to the .env / JSON / YAML file.
         schema_path: Optional path to a validation schema.
-                     For .env files: a YAML/JSON with env-specific rules.
-                     For JSON/YAML files: a JSON Schema draft-7 document.
+                     For .env files: YAML/JSON with env-specific rules.
+                     For JSON/YAML files: JSON Schema draft-7 document.
         fmt: Force file format ('env', 'json', 'yaml').
 
     Returns:
@@ -127,8 +149,8 @@ def validate(
     """
     config_path = Path(config_path)
     result = ValidationResult(str(config_path), fmt or "")
+    log.info("Validating: %s", config_path)
 
-    # 1. Parse the config file
     try:
         data, detected_fmt = parse_file(config_path, fmt)
         result.fmt = detected_fmt
@@ -137,7 +159,6 @@ def validate(
         result.add_error(str(e))
         return result
 
-    # 2. If a schema is provided, validate against it
     if schema_path:
         try:
             schema = load_schema(Path(schema_path))
@@ -146,14 +167,18 @@ def validate(
             return result
 
         if result.fmt == "env":
-            # .env files use custom rules (not JSON Schema)
             _validate_env_rules(data, result, schema)
         else:
-            # JSON / YAML use JSON Schema validation
             _validate_jsonschema(data, schema, result)
     else:
-        # No schema: just check parse + secret-warning for .env
         if result.fmt == "env":
             _validate_env_rules(data, result, {})
 
+    log.info(
+        "Validation complete: %s — %s (%d errors, %d warnings)",
+        config_path,
+        "valid" if result.valid else "invalid",
+        len(result.errors),
+        len(result.warnings),
+    )
     return result
