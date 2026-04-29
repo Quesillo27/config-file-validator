@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Fixed
+- La validacion de schemas `.env` ahora detecta estructuras invalidas (`allowed_keys`, `required`, `forbidden`, `patterns`, `no_empty_values`) y regex mal formadas sin provocar excepciones internas.
+
 ## [1.1.0] — 2026-04-19
 
 ### Added

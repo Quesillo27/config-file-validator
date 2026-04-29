@@ -419,6 +419,34 @@ class TestErrors:
         result = validate(p, schema_path=schema_p)
         assert not result.valid
 
+    def test_env_schema_empty_file(self):
+        p = write_tmp(".env", "PORT=3000\n")
+        schema_p = write_tmp(".yaml", "")
+        result = validate(p, schema_path=schema_p)
+        assert not result.valid
+        assert any("mapping/object" in e["message"] for e in result.errors)
+
+    def test_env_schema_allowed_keys_must_be_list(self):
+        p = write_tmp(".env", "PORT=3000\n")
+        schema_p = write_tmp(".yaml", "allowed_keys: PORT\n")
+        result = validate(p, schema_path=schema_p)
+        assert not result.valid
+        assert any(e["field"] == "allowed_keys" for e in result.errors)
+
+    def test_env_schema_patterns_must_use_valid_regex(self):
+        p = write_tmp(".env", "PORT=3000\n")
+        schema_p = write_tmp(".yaml", "patterns:\n  PORT: '['\n")
+        result = validate(p, schema_path=schema_p)
+        assert not result.valid
+        assert any(e["field"] == "PORT" and "Invalid regex pattern" in e["message"] for e in result.errors)
+
+    def test_env_schema_no_empty_values_must_be_boolean(self):
+        p = write_tmp(".env", "PORT=3000\n")
+        schema_p = write_tmp(".yaml", "no_empty_values: 'yes'\n")
+        result = validate(p, schema_path=schema_p)
+        assert not result.valid
+        assert any(e["field"] == "no_empty_values" for e in result.errors)
+
 
 # ── ValidationResult ──────────────────────────────────────────────────────────
 

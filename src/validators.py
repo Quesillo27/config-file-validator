@@ -53,6 +53,56 @@ class ValidationResult:
 
 # ── Built-in rules for .env files ────────────────────────────────────────────
 
+def _validate_env_schema_definition(rules: Any, result: ValidationResult) -> bool:
+    """Validate the structure of an env schema before applying its rules."""
+    if not isinstance(rules, dict):
+        result.add_error("Env schema must be a mapping/object at the root")
+        return False
+
+    for field_name in ("required", "forbidden", "allowed_keys"):
+        value = rules.get(field_name)
+        if value is None:
+            continue
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            result.add_error(
+                f"Env schema field '{field_name}' must be a list of strings",
+                field=field_name,
+            )
+
+    no_empty = rules.get("no_empty_values")
+    if no_empty is not None and not isinstance(no_empty, bool):
+        result.add_error(
+            "Env schema field 'no_empty_values' must be a boolean",
+            field="no_empty_values",
+        )
+
+    patterns = rules.get("patterns")
+    if patterns is not None:
+        if not isinstance(patterns, dict):
+            result.add_error(
+                "Env schema field 'patterns' must be an object mapping keys to regex strings",
+                field="patterns",
+            )
+        else:
+            for key, pattern in patterns.items():
+                if not isinstance(key, str) or not isinstance(pattern, str):
+                    result.add_error(
+                        "Env schema patterns must map string keys to string regex values",
+                        field="patterns",
+                    )
+                    continue
+                try:
+                    re.compile(pattern)
+                except re.error as exc:
+                    result.add_error(
+                        f"Invalid regex pattern: {exc}",
+                        field=key,
+                        detail=pattern,
+                    )
+
+    return len(result.errors) == 0
+
+
 def _validate_env_rules(data: dict, result: ValidationResult, rules: dict):
     """Apply built-in + schema-defined rules to an env dict."""
     required = rules.get("required", [])
@@ -167,6 +217,8 @@ def validate(
             return result
 
         if result.fmt == "env":
+            if not _validate_env_schema_definition(schema, result):
+                return result
             _validate_env_rules(data, result, schema)
         else:
             _validate_jsonschema(data, schema, result)

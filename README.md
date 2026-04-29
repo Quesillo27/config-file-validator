@@ -201,6 +201,11 @@ allowed_keys:
   - NODE_ENV
 ```
 
+Notas del schema `.env`:
+- La raiz debe ser un objeto YAML/JSON.
+- `required`, `forbidden` y `allowed_keys` deben ser listas de strings.
+- `patterns` debe mapear claves a regex validas; una regex invalida ahora se reporta como error de validacion en lugar de provocar un traceback.
+
 ## Schemas para JSON/YAML
 
 Usa [JSON Schema draft-7](https://json-schema.org/):
